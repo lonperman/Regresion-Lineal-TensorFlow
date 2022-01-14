@@ -1,3 +1,5 @@
+var stopTraining;
+
 async function getData() {
     const datosCasasR = await fetch("datos.json");
     const datosCasas = await datosCasasR.json();
@@ -6,6 +8,55 @@ async function getData() {
     datosLimpios = datosLimpios.filter(casa => (casa.precio != null && casa.cuartos != null));
     return datosLimpios
 }
+
+//mostrar curva de inferencia()
+async function verCurvaInferencia(){
+    var data = await getData();
+    var tensorData = await convertirDatosATensores(data);
+    const {entradasMax, entradasMin, etiquetasMin, etiquetasMax} = tensorData;
+
+    const [xs,preds] = tf.tidy(() => {
+        const xs = tf.linspace(0,1,100);
+        const preds = modelo.predict(xs.reshape([100,1]));
+        const desnormX = xs
+            .mul(entradasMax.sub(entradasMin))
+            .add(entradasMin);
+
+        const desnormY = preds
+        .mul(etiquetasMax.sub(etiquetasMin))
+        .add(etiquetasMin);
+
+        //Un-normalize the data
+        return [desnormX.dataSync(), desnormY.dataSync()];
+    });
+
+    const puntosPrediccion = Array.from(xs).map((val, i) => {
+        return {x: val, y: preds[i]}
+    });
+
+    const puntosOriginales = data.map(d => ({
+        x: d.cuartos, y: d.precio,
+    }));
+
+    tfvis.render.scatterplot(
+        {name: 'Predicciones vs Originales'},
+        {values: [puntosOriginales, puntosPrediccion], series: ['originales','predicciones']},
+        {
+            xLabel: 'Cuartos',
+            yLabel: 'Precio',
+            height: 300
+        }
+    )
+}
+
+async function cargarModelo(){
+    const uploadJSONInput = document.getElementById('upload-json');
+    const uploadWeightsInput = document.getElementById('upload-weights');
+    modelo = await tf.loadLayersModel(tf.io.browserFiles(
+        [uploadJSONInput.files[0], uploadWeightsInput.files[0]]
+    ));
+    console.log("Modelo cargado");
+};
 
 function visualizarDatos(data){
     const valores = data.map(d => ({ x: d.cuartos, y: d.precio}));
@@ -46,12 +97,16 @@ async function entrenarModelo(model, inputs, labels){
         tamanioBatch,
         epochs,
         shuffle: true,
-        callbacks: tfvis.show.fitCallbacks(
-            {name: 'Training Performance'},
-            ['loss', 'mse'],
-            {height: 200, callbacks: ['onEpochEnd']}
-        )
-    })
+        callbacks: {
+            onEpochEnd: (epoch, log) => {
+                history.push(log);
+                tfvis.show.history(surface,  history,['loss','mse']);
+                if(stopTraining){
+                    modelo.stopTraining = true;
+                }
+            }
+        }
+    });
 }
 
 function convertirDatosATensores(data){
@@ -94,3 +149,9 @@ async function run(){
 }
 
 run();
+
+//Almacenar el modelo
+
+async function guardarModelo(){
+    const saveResult = await modelo.save('downloads://modelo-regresion');
+}
